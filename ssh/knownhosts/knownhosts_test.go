@@ -141,35 +141,8 @@ func TestIPv6Address(t *testing.T) {
 }
 
 func TestBasic(t *testing.T) {
-	str := fmt.Sprintf("#comment\n\nserver.org,%s %s", testAddr, edKeyStr)
+	str := fmt.Sprintf("#comment\n\nserver.org,%s %s\notherhost %s", testAddr, edKeyStr, ecKeyStr)
 	db := testDB(t, str)
-	if err := db.check("server.org:22", testAddr, edKey); err != nil {
-		t.Errorf("got error %q, want none", err)
-	}
-
-	want := KnownKey{
-		Key:      edKey,
-		Filename: "testdb",
-		Line:     3,
-	}
-	if err := db.check("server.org:22", testAddr, ecKey); err == nil {
-		t.Errorf("succeeded, want KeyError")
-	} else if ke, ok := err.(*KeyError); !ok {
-		t.Errorf("got %T, want *KeyError", err)
-	} else if len(ke.Want) != 1 {
-		t.Errorf("got %v, want 1 entry", ke)
-	} else if !reflect.DeepEqual(ke.Want[0], want) {
-		t.Errorf("got %v, want %v", ke.Want[0], want)
-	}
-}
-
-func TestMultiple(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	fmt.Fprintf(buf, "#comment\n\n")
-	fmt.Fprintf(buf, "server.org,%s %s\n", testAddr, edKeyStr)
-	fmt.Fprintf(buf, "foo.bar,%s %s\n", "42.42.42.42", edKeyStr)
-
-	db := testDB(t, buf.String())
 	if err := db.check("server.org:22", testAddr, edKey); err != nil {
 		t.Errorf("got error %q, want none", err)
 	}
@@ -262,3 +235,74 @@ func TestWildcardMatch(t *testing.T) {
 }
 
 // TODO(hanwen): test coverage for certificates.
+
+const testHostname = "hostneem"
+
+// generated with keygen -H -f
+const encodedTestHostnameHash = "|1|NQKGghVJ8E0L+IwhYPf6edR/JMA=|clAnchEmgCIGI5GCiPnjWn56pLc="
+
+func TestHostHash(t *testing.T) {
+	testHostHash(t, testHostname, encodedTestHostnameHash)
+
+}
+
+func TestHashList(t *testing.T) {
+	encoded := HashHostname(testHostname)
+	testHostHash(t, testHostname, encoded)
+}
+
+func testHostHash(t *testing.T, hostname, encoded string) {
+	typ, salt, hash, err := decodeHash(encoded)
+	if err != nil {
+		t.Fatalf("decodeHash: %v", err)
+	}
+
+	if got := encodeHash(typ, salt, hash); got != encoded {
+		t.Errorf("got encoding %s want %s", got, encoded)
+	}
+
+	if typ != "1" {
+		t.Fatalf("got hash type %s, want 1", typ)
+	}
+
+	got := hashHost(hostname, salt)
+	if !bytes.Equal(got, hash) {
+		t.Errorf("got hash %x want %x", got, hash)
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	for in, want := range map[string]string{
+		"127.0.0.1:22":             "127.0.0.1",
+		"[127.0.0.1]:22":           "127.0.0.1",
+		"[127.0.0.1]:23":           "[127.0.0.1]:23",
+		"127.0.0.1:23":             "[127.0.0.1]:23",
+		"[a.b.c]:22":               "a.b.c",
+		"[abcd:abcd:abcd:abcd]":    "[abcd:abcd:abcd:abcd]",
+		"[abcd:abcd:abcd:abcd]:22": "[abcd:abcd:abcd:abcd]",
+		"[abcd:abcd:abcd:abcd]:23": "[abcd:abcd:abcd:abcd]:23",
+	} {
+		got := Normalize(in)
+		if got != want {
+			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestHashedHostkeyCheck(t *testing.T) {
+	str := fmt.Sprintf("%s %s", HashHostname(testHostname), edKeyStr)
+	db := testDB(t, str)
+	if err := db.check(testHostname+":22", testAddr, edKey); err != nil {
+		t.Errorf("check(%s): %v", testHostname, err)
+	}
+	want := &KeyError{
+		Want: []KnownKey{{
+			Filename: "testdb",
+			Line:     1,
+			Key:      edKey,
+		}},
+	}
+	if got := db.check(testHostname+":22", testAddr, alternateEdKey); !reflect.DeepEqual(got, want) {
+		t.Errorf("got error %v, want %v", got, want)
+	}
+}
